@@ -211,13 +211,10 @@ class TgNotify:
         #   <small><font>content</font></small><br>
         #   HEADER<br>
         # Wrap only the un-wrapped header lines in <b>.
+        # Boundary is zero-width (lookbehind), so the leading \n/<br> is
+        # preserved in place; the replacement only wraps the header text.
         sanitized = SECTION_HEADER_RE.sub(
-            lambda m: (
-                ("\n" if m.group(0).startswith("\n") else "")
-                + "<b>"
-                + m.group(1)
-                + "</b><br>"
-            ),
+            lambda m: "<b>" + m.group(1) + "</b><br>",
             html,
         )
 

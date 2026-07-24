@@ -142,13 +142,10 @@ def format_update_description(description: str) -> str:
 
     # Bold section headers before parsing (same pattern as Telegram sanitization).
     # Lines like "Android Version<br>" that are NOT inside <small>/<font> are headers.
+    # Boundary is zero-width (lookbehind), so the leading \n/<br> is preserved
+    # in place; the replacement only needs to wrap the header text.
     bolded = SECTION_HEADER_RE.sub(
-        lambda m: (
-            ("\n" if m.group(0).startswith("\n") else "")
-            + "<b>"
-            + m.group(1)
-            + "</b><br>"
-        ),
+        lambda m: "<b>" + m.group(1) + "</b><br>",
         description,
     )
 

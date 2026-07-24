@@ -86,49 +86,64 @@ def log_variant_header(
 
 _CACHE_MISS = object()
 
+#: How long a waiting worker blocks on a peer's in-flight fetch before looping
+#: to re-check stop_event / cache. Bounds a waiter's stall independently of the
+#: fetcher, so a stuck fetch can never strand its waiters indefinitely.
+_METADATA_WAIT_TIMEOUT = 15.0
+
 
 def get_cached_ota_metadata(ctx: RunContext, url: str) -> dict[str, str] | None:
-    if ctx.stop_event.is_set():
-        return None
-    fetcher_event: threading.Event | None = None
-    with ctx.cache_lock:
-        cached = ctx.metadata_cache.get(url, _CACHE_MISS)
-        if cached is not _CACHE_MISS:
-            return cast(dict[str, str] | None, cached)
-        # Another worker is already fetching this URL; capture its event, then
-        # release the lock before waiting so the fetcher can re-acquire it.
-        inflight = ctx._metadata_inflight.get(url)
-        if inflight is not None:
-            wait_event = inflight
-        else:
-            # We are the fetcher: register an in-flight event under the lock so
-            # no other worker decides to fetch the same URL concurrently.
-            wait_event = None
-            fetcher_event = threading.Event()
-            ctx._metadata_inflight[url] = fetcher_event
-
-    if wait_event is not None:
-        wait_event.wait()
+    while True:
+        if ctx.stop_event.is_set():
+            return None
+        fetcher_event: threading.Event | None = None
         with ctx.cache_lock:
             cached = ctx.metadata_cache.get(url, _CACHE_MISS)
-            return (
-                cast(dict[str, str] | None, cached)
-                if cached is not _CACHE_MISS
-                else None
-            )
+            if cached is not _CACHE_MISS:
+                return cast(dict[str, str] | None, cached)
+            # Another worker is already fetching this URL; capture its event, then
+            # release the lock before waiting so the fetcher can re-acquire it.
+            inflight = ctx._metadata_inflight.get(url)
+            if inflight is not None:
+                wait_event = inflight
+            else:
+                # We are the fetcher: register an in-flight event under the lock so
+                # no other worker decides to fetch the same URL concurrently.
+                wait_event = None
+                fetcher_event = threading.Event()
+                ctx._metadata_inflight[url] = fetcher_event
 
-    assert fetcher_event is not None
-    ota_meta: dict[str, str] | None = None
-    try:
-        ota_meta = get_ota_metadata(
-            url, session=ctx.session(), stop_event=ctx.stop_event
-        )
-    finally:
-        with ctx.cache_lock:
-            ctx.metadata_cache[url] = ota_meta
-            ctx._metadata_inflight.pop(url, None)
-            fetcher_event.set()
-    return ota_meta
+        if wait_event is not None:
+            # Bounded wait: if the fetcher outlives the budget, loop to re-check
+            # stop_event (responsive shutdown) and the cache instead of blocking
+            # forever on a peer that may be stuck on a socket read.
+            if not wait_event.wait(_METADATA_WAIT_TIMEOUT):
+                continue
+            with ctx.cache_lock:
+                cached = ctx.metadata_cache.get(url, _CACHE_MISS)
+            if cached is not _CACHE_MISS:
+                return cast(dict[str, str] | None, cached)
+            # Woken but nothing cached => the fetch failed (failures are not
+            # cached, see below). Loop and try to fetch it ourselves rather than
+            # inheriting the peer's transient failure.
+            continue
+
+        assert fetcher_event is not None
+        ota_meta: dict[str, str] | None = None
+        try:
+            ota_meta = get_ota_metadata(
+                url, session=ctx.session(), stop_event=ctx.stop_event
+            )
+        finally:
+            with ctx.cache_lock:
+                # Only cache successful lookups. Caching None would poison the
+                # URL for every later variant sharing it, turning one transient
+                # network blip into permanently-dropped updates.
+                if ota_meta is not None:
+                    ctx.metadata_cache[url] = ota_meta
+                ctx._metadata_inflight.pop(url, None)
+                fetcher_event.set()
+        return ota_meta
 
 
 def save_processed_update(ctx: RunContext, title: str) -> None:

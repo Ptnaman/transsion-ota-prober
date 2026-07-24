@@ -239,6 +239,13 @@ def _find_entry(cd: bytes, target_name: bytes) -> tuple:
                     comp_size=comp_size,
                     local_offset=local_offset,
                 )
+                # A malformed/absent 0x0001 extra block leaves a sentinel in
+                # place; fail loud instead of issuing a Range request built from
+                # 0xFFFFFFFF (which would fetch garbage or a 416).
+                if comp_size == 0xFFFFFFFF or local_offset == 0xFFFFFFFF:
+                    raise RemoteZipFetchError(
+                        "ZIP64 extra field missing 64-bit size/offset for target entry."
+                    )
             return method, comp_size, local_offset, name_len, extra_len
 
         pos += 46 + name_len + extra_len + comment_len
@@ -321,7 +328,10 @@ def fetch_zip_member(
     end = local_offset + 30 + name_len + 65535 + comp_size - 1
     if end > size - 1:
         end = size - 1
-    raw = _range_get(sess, url, local_offset, end, timeout, hdrs, attempts=2)
+    # attempts=1: get_ota_metadata already wraps this whole call in its own
+    # 3x transient-retry loop, so retrying here too would stack two backoff
+    # schedules (up to 6 tries) and lengthen worst-case hang time.
+    raw = _range_get(sess, url, local_offset, end, timeout, hdrs)
     if raw[0:4] != _LOCAL_SIG:
         raise RemoteZipFetchError("Local file header signature mismatch.")
     loc_name_len = struct.unpack("<H", raw[26:28])[0]
