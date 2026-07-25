@@ -9,11 +9,11 @@ variants:
     android_version: "16"
     build_tag: "BP2A.250605.031.A3"
     product: "X6857-OP"
-    incremental: "201400022"
+    incremental: "201500013"
 
   - variant: "India"
     android_version: "16"
     build_tag: "BP2A.250605.031.A3"
     product: "X6857B-IN"
     device: "Infinix-X6857B"
-    incremental: "201400019"
+    incremental: "201500018"

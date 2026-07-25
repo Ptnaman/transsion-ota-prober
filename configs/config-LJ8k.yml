@@ -9,7 +9,7 @@ variants:
     android_version: "15"
     build_tag: "AP3A.240905.015.A2"
     product: "LJ8k-OP"
-    incremental: "175004"
+    incremental: "180003"
 
   - variant: "India"
     android_version: "15"
