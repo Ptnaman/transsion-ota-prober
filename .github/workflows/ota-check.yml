@@ -22,10 +22,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
 
-      - name: Test TECNO POVA Curve 5G
+      - name: Scan all TECNO Infinix itel configs
         env:
           bot_token: ${{ secrets.BOT_TOKEN }}
           chat_id: ${{ secrets.CHAT_ID }}
           telegraph_token: ${{ secrets.TELEGRAPH_TOKEN }}
         run: |
-          checkota -c LJ8k --dry-run
+          checkota -d configs/ --jobs 4 --timeout 600 --dry-run
