@@ -1,4 +1,4 @@
-name: Tecno Naman Targeted 30-Day Push
+name: Tecno Naman Targeted 6-Month Push
 
 on:
   workflow_dispatch:
@@ -19,12 +19,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Check whether this targeted push already completed
+      - name: Check whether this 6-month targeted push already completed
         id: guard
         run: |
-          if [ -f targeted-backfill-2026-08-16.done ]; then
+          if [ -f targeted-backfill-6months-2026-08-16.done ]; then
             echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "This targeted 30-day push has already completed."
+            echo "This targeted 6-month push has already completed."
           else
             echo "run=true" >> "$GITHUB_OUTPUT"
           fi
@@ -41,10 +41,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
 
-      - name: Discover GT 20 POVA and CAMON 30 updates from last 30 days
+      - name: Discover GT 20 POVA and CAMON 30 updates from last 6 months
         if: steps.guard.outputs.run == 'true'
         run: |
-          SINCE_DATE="$(date -u -d '30 days ago' +%F)"
+          SINCE_DATE="$(date -u -d '6 months ago' +%F)"
           echo "Scanning OTA builds since $SINCE_DATE"
           python scripts/prepare_targeted_backfill.py --since-date "$SINCE_DATE" --timeout 1800
 
@@ -55,7 +55,7 @@ jobs:
             echo "Selected OTA titles:"
             cat .backfill_recent_titles.txt
           else
-            echo "No matching OTA updates found in the last 30 days."
+            echo "No matching OTA updates found in the last 6 months."
           fi
 
       - name: Backup configs before targeted notification run
@@ -94,16 +94,16 @@ jobs:
         run: |
           python scripts/verify_recent_backfill.py
 
-      - name: Mark targeted push complete and persist state
+      - name: Mark 6-month targeted push complete and persist state
         if: steps.guard.outputs.run == 'true' && success()
         run: |
-          touch targeted-backfill-2026-08-16.done
+          touch targeted-backfill-6months-2026-08-16.done
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f processed_updates.txt targeted-backfill-2026-08-16.done
+          git add -f processed_updates.txt targeted-backfill-6months-2026-08-16.done
           if git diff --cached --quiet; then
             echo "No targeted backfill state changes to save."
           else
-            git commit -m "Complete targeted 30 day OTA push"
+            git commit -m "Complete targeted 6 month OTA push"
             git push
           fi
