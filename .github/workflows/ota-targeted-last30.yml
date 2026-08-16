@@ -1,0 +1,109 @@
+name: Tecno Naman Targeted 30-Day Push
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tecno-naman-ota-check
+  cancel-in-progress: false
+
+jobs:
+  targeted-backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check whether this targeted push already completed
+        id: guard
+        run: |
+          if [ -f targeted-backfill-2026-08-16.done ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "This targeted 30-day push has already completed."
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Python
+        if: steps.guard.outputs.run == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install OTA Tracker
+        if: steps.guard.outputs.run == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Discover GT 20 POVA and CAMON 30 updates from last 30 days
+        if: steps.guard.outputs.run == 'true'
+        run: |
+          SINCE_DATE="$(date -u -d '30 days ago' +%F)"
+          echo "Scanning OTA builds since $SINCE_DATE"
+          python scripts/prepare_targeted_backfill.py --since-date "$SINCE_DATE" --timeout 1800
+
+      - name: Show selected targeted updates
+        if: steps.guard.outputs.run == 'true'
+        run: |
+          if [ -s .backfill_recent_titles.txt ]; then
+            echo "Selected OTA titles:"
+            cat .backfill_recent_titles.txt
+          else
+            echo "No matching OTA updates found in the last 30 days."
+          fi
+
+      - name: Backup configs before targeted notification run
+        if: steps.guard.outputs.run == 'true'
+        run: |
+          cp -a configs .configs-targeted-backup
+
+      - name: Push matching OTA updates to Telegram
+        if: steps.guard.outputs.run == 'true'
+        env:
+          bot_token: ${{ secrets.BOT_TOKEN }}
+          chat_id: ${{ secrets.CHAT_ID }}
+          telegraph_token: ${{ secrets.TELEGRAPH_TOKEN }}
+        run: |
+          if [ ! -s .backfill_target_devices.txt ]; then
+            echo "No matching target devices to notify."
+            exit 0
+          fi
+
+          while IFS= read -r device; do
+            [ -z "$device" ] && continue
+            echo "Checking targeted device: $device"
+            checkota -c "$device" --timeout 900
+          done < .backfill_target_devices.txt
+
+      - name: Restore configs after targeted notification run
+        if: always() && steps.guard.outputs.run == 'true'
+        run: |
+          if [ -d .configs-targeted-backup ]; then
+            rm -rf configs
+            mv .configs-targeted-backup configs
+          fi
+
+      - name: Verify selected notifications were saved
+        if: steps.guard.outputs.run == 'true' && success()
+        run: |
+          python scripts/verify_recent_backfill.py
+
+      - name: Mark targeted push complete and persist state
+        if: steps.guard.outputs.run == 'true' && success()
+        run: |
+          touch targeted-backfill-2026-08-16.done
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f processed_updates.txt targeted-backfill-2026-08-16.done
+          if git diff --cached --quiet; then
+            echo "No targeted backfill state changes to save."
+          else
+            git commit -m "Complete targeted 30 day OTA push"
+            git push
+          fi
