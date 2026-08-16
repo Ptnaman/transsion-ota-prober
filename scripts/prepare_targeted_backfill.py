@@ -3,7 +3,7 @@
 
 This performs a sequential dry-run over all configs so Device -> OTA -> Build date
 log lines stay associated. It then removes only matching recent OTA titles from
-processed_updates.txt and writes the matching device codenames for a following
+processed_updates.txt and writes the matching config keys for a following
 Telegram notification pass.
 """
 
@@ -15,6 +15,8 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+
+import yaml
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 DEVICE_RE = re.compile(r"Device:\s*(.+?)\s+\(([^()]+)\)\s*$")
@@ -33,6 +35,23 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def build_device_to_config_map() -> dict[str, str]:
+    """Map YAML device values (e.g. TECNO-LJ8) to checkota config keys (e.g. LJ8)."""
+    mapping: dict[str, str] = {}
+    for path in sorted(Path("configs").glob("config-*.yml")):
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except Exception as exc:
+            print(f"Warning: could not read {path}: {exc}", file=sys.stderr)
+            continue
+        device = str(data.get("device", "")).strip()
+        if not device:
+            continue
+        config_key = path.stem.removeprefix("config-")
+        mapping[device] = config_key
+    return mapping
+
+
 def main() -> int:
     args = parse_args()
     try:
@@ -49,6 +68,11 @@ def main() -> int:
 
     if not processed.exists():
         print("processed_updates.txt is missing; run the baseline workflow first.", file=sys.stderr)
+        return 2
+
+    device_to_config = build_device_to_config_map()
+    if not device_to_config:
+        print("Could not build device-to-config mapping from configs/.", file=sys.stderr)
         return 2
 
     original_text = processed.read_text(encoding="utf-8")
@@ -87,7 +111,7 @@ def main() -> int:
         return proc.returncode or 1
 
     current_device_name: str | None = None
-    current_device_code: str | None = None
+    current_device_id: str | None = None
     pending_title: tuple[str, str, str] | None = None
     dated: list[tuple[str, str, str, dt.date]] = []
 
@@ -97,16 +121,16 @@ def main() -> int:
         device_match = DEVICE_RE.search(line)
         if device_match:
             current_device_name = device_match.group(1).strip()
-            current_device_code = device_match.group(2).strip()
+            current_device_id = device_match.group(2).strip()
             pending_title = None
             continue
 
         title_match = TITLE_RE.search(line)
-        if title_match and current_device_name and current_device_code:
+        if title_match and current_device_name and current_device_id:
             pending_title = (
                 title_match.group(1).strip(),
                 current_device_name,
-                current_device_code,
+                current_device_id,
             )
             continue
 
@@ -117,33 +141,46 @@ def main() -> int:
             except ValueError:
                 pending_title = None
                 continue
-            title, device_name, device_code = pending_title
-            dated.append((title, device_name, device_code, build_day))
+            title, device_name, device_id = pending_title
+            dated.append((title, device_name, device_id, build_day))
             pending_title = None
 
     selected_titles: list[str] = []
-    selected_devices: list[str] = []
-    selected_rows: list[tuple[str, str, str, dt.date]] = []
+    selected_configs: list[str] = []
+    selected_rows: list[tuple[str, str, str, str, dt.date]] = []
     seen_titles: set[str] = set()
-    seen_devices: set[str] = set()
+    seen_configs: set[str] = set()
 
-    for title, device_name, device_code, build_day in dated:
+    unresolved: set[str] = set()
+
+    for title, device_name, device_id, build_day in dated:
         if build_day < cutoff:
             continue
         if not TARGET_RE.search(device_name):
             continue
+
+        config_key = device_to_config.get(device_id)
+        if not config_key:
+            unresolved.add(device_id)
+            continue
+
         if title not in seen_titles:
             selected_titles.append(title)
-            selected_rows.append((title, device_name, device_code, build_day))
+            selected_rows.append((title, device_name, device_id, config_key, build_day))
             seen_titles.add(title)
-        if device_code not in seen_devices:
-            selected_devices.append(device_code)
-            seen_devices.add(device_code)
+        if config_key not in seen_configs:
+            selected_configs.append(config_key)
+            seen_configs.add(config_key)
+
+    if unresolved:
+        print("Warning: matching devices with no config mapping:", file=sys.stderr)
+        for device_id in sorted(unresolved):
+            print(f"  - {device_id}", file=sys.stderr)
 
     filtered = [title for title in original_titles if title not in seen_titles]
     processed.write_text("".join(f"{title}\n" for title in filtered), encoding="utf-8")
     selected_file.write_text("".join(f"{title}\n" for title in selected_titles), encoding="utf-8")
-    devices_file.write_text("".join(f"{device}\n" for device in selected_devices), encoding="utf-8")
+    devices_file.write_text("".join(f"{config}\n" for config in selected_configs), encoding="utf-8")
 
     if not selected_titles:
         print(f"No matching GT 20 / POVA / CAMON 30 OTA builds found on or after {cutoff.isoformat()}.")
@@ -151,11 +188,14 @@ def main() -> int:
 
     already_processed = sum(1 for title in selected_titles if title in original_set)
     print(f"Selected {len(selected_titles)} matching OTA title(s) with build date >= {cutoff.isoformat()}.")
-    print(f"Target device config(s): {len(selected_devices)}")
+    print(f"Target config(s): {len(selected_configs)}")
     print(f"Temporarily removed {already_processed} already-processed title(s) so they can be pushed again.")
     print("Selected updates:")
-    for title, device_name, device_code, build_day in selected_rows:
-        print(f"  - {device_name} ({device_code}) | {build_day.isoformat()} | {title}")
+    for title, device_name, device_id, config_key, build_day in selected_rows:
+        print(
+            f"  - {device_name} ({device_id}) -> config {config_key} | "
+            f"{build_day.isoformat()} | {title}"
+        )
     return 0
 
 
