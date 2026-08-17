@@ -28,17 +28,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
 
-      - name: Extract KM9 170 to 180 OTA source metadata
+      - name: Probe KM9 Global from 170SP05 source build
         run: |
-          python - <<'PY'
-          from checkota.zip_metadata import fetch_zip_member
-          url = "https://android.googleapis.com/packages/ota-api/package/8eae88d4e49233f30b0ff61cee652235b176031b.zip"
-          content = fetch_zip_member(
-              url,
-              "META-INF/com/android/metadata",
-              timeout=30,
-              headers={"User-Agent": "transsion-ota-prober/1.0"},
-          ).decode("utf-8", errors="replace")
-          print("===== RAW OTA METADATA =====")
-          print(content)
-          PY
+          checkota -c configs/config-KM9.yml --region OP --incremental 170003 --dry-run --skip-telegram --timeout 120
