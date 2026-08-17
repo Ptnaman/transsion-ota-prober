@@ -12,99 +12,46 @@ permissions:
 jobs:
   telegram-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install OTA Tracker
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e .
-
-      - name: Test KM9 persistent two-step Google check-in
+      - name: Send missed POVA Slim 5G Android 16 OTA
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
           python - <<'PY'
-          import gzip
+          import os
           import requests
-          import checkota
-          from checkin import checkin_generator_pb2
-          from utils import functions
 
-          fingerprint = "TECNO/KM9-OP/TECNO-KM9:15/AP3A.240905.015.A2/180002:user/release-keys"
-          model = "TECNO POVA Slim 5G"
-          device = "TECNO-KM9"
-          imei = functions.generateImei()
-          digest = functions.generateDigest()
-          serial = functions.generateSerial()
-          mac = functions.generateMac()
-          headers = {
-              "accept-encoding": "gzip, deflate",
-              "content-encoding": "gzip",
-              "content-type": "application/x-protobuffer",
-              "user-agent": f"Dalvik/2.1.0 (Linux; U; Android 15; {model} Build/AP3A.240905.015.A2)",
-          }
+          text = """<b>OTA Update Available</b>
 
-          def make_request(android_id=0, security_token=0):
-              payload = checkin_generator_pb2.AndroidCheckinRequest()
-              build = checkin_generator_pb2.AndroidBuildProto()
-              checkin = checkin_generator_pb2.AndroidCheckinProto()
-              build.id = fingerprint
-              build.timestamp = 0
-              build.device = device
-              checkin.build.CopyFrom(build)
-              checkin.lastCheckinMsec = 0
-              checkin.roaming = "WIFI::"
-              checkin.userNumber = 0
-              checkin.deviceType = 2
-              checkin.voiceCapable = False
-              checkin.unknown19 = "WIFI"
-              payload.imei = imei
-              payload.id = android_id
-              payload.digest = digest
-              payload.checkin.CopyFrom(checkin)
-              payload.locale = "en-US"
-              payload.macAddr.append(mac)
-              payload.timeZone = "America/New_York"
-              payload.version = 3
-              payload.serialNumber = serial
-              payload.macAddrType.append("wifi")
-              payload.fragment = 0
-              payload.userSerialNumber = 0
-              payload.fetchSystemUpdates = 1
-              payload.unknown30 = 0
-              if security_token:
-                  payload.securityToken = security_token
-              return gzip.compress(payload.SerializeToString())
+<b>Device:</b> TECNO POVA Slim 5G (Global - OP Market)
+<b>Title:</b> Tcard_KM9-16.3.0.145SP04-OP005PF001AZ_a15
+<b>OS:</b> Android 16
 
-          session = requests.Session()
-          first = session.post("https://android.googleapis.com/checkin", data=make_request(), headers=headers, timeout=30)
-          first.raise_for_status()
-          r1 = checkin_generator_pb2.AndroidCheckinResponse()
-          r1.ParseFromString(first.content)
-          print(f"FIRST androidId={r1.androidId} securityToken={r1.securityToken} settings={len(r1.setting)}")
-          first_settings = {e.name.decode(errors='ignore'): e.value.decode(errors='ignore') for e in r1.setting}
-          print("FIRST update_title=", first_settings.get("update_title"))
-          print("FIRST update_url=", first_settings.get("update_url"))
+<b>Update Version:</b>
+KM9-16.3.0.145SP04(OP005PF001AZ)
 
-          second = session.post(
-              "https://android.googleapis.com/checkin",
-              data=make_request(r1.androidId, r1.securityToken),
-              headers=headers,
-              timeout=30,
+<b>Size:</b> 8849.2 MB
+<b>Incremental:</b> 301450032
+<b>Security patch:</b> 2026-08-01
+<b>Fingerprint:</b> <code>TECNO/KM9-OP/TECNO-KM9:16/BP2A.250605.031.A3/301450032:user/release-keys</code>
+<b>Build date:</b> 2026-08-11 01:14:46 (CST)
+
+<b>Google OTA link:</b>
+https://android.googleapis.com/packages/ota-api/package/572127f6cb5c8ea3ed479b275e5b8cac8386a082.zip
+"""
+          response = requests.post(
+              f"https://api.telegram.org/bot{os.environ['BOT_TOKEN']}/sendMessage",
+              json={
+                  "chat_id": os.environ["CHAT_ID"],
+                  "text": text,
+                  "parse_mode": "HTML",
+                  "disable_web_page_preview": True,
+              },
+              timeout=45,
           )
-          second.raise_for_status()
-          r2 = checkin_generator_pb2.AndroidCheckinResponse()
-          r2.ParseFromString(second.content)
-          print(f"SECOND androidId={r2.androidId} securityToken={r2.securityToken} settings={len(r2.setting)}")
-          second_settings = {e.name.decode(errors='ignore'): e.value.decode(errors='ignore') for e in r2.setting}
-          print("SECOND update_title=", second_settings.get("update_title"))
-          print("SECOND update_url=", second_settings.get("update_url"))
-          print("SECOND update_size=", second_settings.get("update_size"))
+          response.raise_for_status()
+          print("POVA Slim 5G Android 16 OTA notification sent successfully")
           PY
