@@ -37,6 +37,7 @@ jobs:
           chat_id: ${{ secrets.CHAT_ID }}
           telegraph_token: ${{ secrets.TELEGRAPH_TOKEN }}
         run: |
+          sed -i 's/timeout=15/timeout=45/' checkota/telegram.py
           checkota -d configs/ --jobs 4 --timeout 600
 
       - name: Persist OTA state
