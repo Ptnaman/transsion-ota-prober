@@ -28,11 +28,21 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
 
-      - name: Send TECNO POVA Slim 5G Global OTA to Telegram for testing
-        env:
-          bot_token: ${{ secrets.BOT_TOKEN }}
-          chat_id: ${{ secrets.CHAT_ID }}
-          telegraph_token: ${{ secrets.TELEGRAPH_TOKEN }}
+      - name: Probe TECNO POVA Slim 5G Global with multiple identities
         run: |
-          sed -i 's/timeout=15/timeout=45/' checkota/telegram.py
-          checkota -c configs/config-KM9.yml --region OP --force-notify --timeout 600
+          set -o pipefail
+          FOUND=""
+          for i in $(seq 1 20); do
+            IMEI=$(python -c 'from utils import functions; print(functions.generateImei())')
+            echo "===== Identity attempt $i/20 | IMEI: $IMEI ====="
+            OUTPUT=$(checkota -c configs/config-KM9.yml --region OP --imei "$IMEI" --dry-run --skip-telegram --timeout 60 2>&1 || true)
+            echo "$OUTPUT"
+            if echo "$OUTPUT" | grep -q "New OTA update found"; then
+              FOUND="$IMEI"
+              echo "FOUND_ELIGIBLE_IMEI=$IMEI"
+              break
+            fi
+          done
+          if [ -z "$FOUND" ]; then
+            echo "No eligible identity found in 20 attempts."
+          fi
