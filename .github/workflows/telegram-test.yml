@@ -33,6 +33,7 @@ jobs:
           python - <<'PY'
           import gzip
           import requests
+          import checkota
           from checkin import checkin_generator_pb2
           from utils import functions
 
