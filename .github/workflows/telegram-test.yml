@@ -28,17 +28,82 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
 
-      - name: Extract KM9 Android 16 OTA source metadata
+      - name: Test KM9 persistent two-step Google check-in
         run: |
           python - <<'PY'
-          from checkota.zip_metadata import fetch_zip_member
-          url = "https://android.googleapis.com/packages/ota-api/package/572127f6cb5c8ea3ed479b275e5b8cac8386a082.zip"
-          content = fetch_zip_member(
-              url,
-              "META-INF/com/android/metadata",
+          import gzip
+          import requests
+          from checkin import checkin_generator_pb2
+          from utils import functions
+
+          fingerprint = "TECNO/KM9-OP/TECNO-KM9:15/AP3A.240905.015.A2/180002:user/release-keys"
+          model = "TECNO POVA Slim 5G"
+          device = "TECNO-KM9"
+          imei = functions.generateImei()
+          digest = functions.generateDigest()
+          serial = functions.generateSerial()
+          mac = functions.generateMac()
+          headers = {
+              "accept-encoding": "gzip, deflate",
+              "content-encoding": "gzip",
+              "content-type": "application/x-protobuffer",
+              "user-agent": f"Dalvik/2.1.0 (Linux; U; Android 15; {model} Build/AP3A.240905.015.A2)",
+          }
+
+          def make_request(android_id=0, security_token=0):
+              payload = checkin_generator_pb2.AndroidCheckinRequest()
+              build = checkin_generator_pb2.AndroidBuildProto()
+              checkin = checkin_generator_pb2.AndroidCheckinProto()
+              build.id = fingerprint
+              build.timestamp = 0
+              build.device = device
+              checkin.build.CopyFrom(build)
+              checkin.lastCheckinMsec = 0
+              checkin.roaming = "WIFI::"
+              checkin.userNumber = 0
+              checkin.deviceType = 2
+              checkin.voiceCapable = False
+              checkin.unknown19 = "WIFI"
+              payload.imei = imei
+              payload.id = android_id
+              payload.digest = digest
+              payload.checkin.CopyFrom(checkin)
+              payload.locale = "en-US"
+              payload.macAddr.append(mac)
+              payload.timeZone = "America/New_York"
+              payload.version = 3
+              payload.serialNumber = serial
+              payload.macAddrType.append("wifi")
+              payload.fragment = 0
+              payload.userSerialNumber = 0
+              payload.fetchSystemUpdates = 1
+              payload.unknown30 = 0
+              if security_token:
+                  payload.securityToken = security_token
+              return gzip.compress(payload.SerializeToString())
+
+          session = requests.Session()
+          first = session.post("https://android.googleapis.com/checkin", data=make_request(), headers=headers, timeout=30)
+          first.raise_for_status()
+          r1 = checkin_generator_pb2.AndroidCheckinResponse()
+          r1.ParseFromString(first.content)
+          print(f"FIRST androidId={r1.androidId} securityToken={r1.securityToken} settings={len(r1.setting)}")
+          first_settings = {e.name.decode(errors='ignore'): e.value.decode(errors='ignore') for e in r1.setting}
+          print("FIRST update_title=", first_settings.get("update_title"))
+          print("FIRST update_url=", first_settings.get("update_url"))
+
+          second = session.post(
+              "https://android.googleapis.com/checkin",
+              data=make_request(r1.androidId, r1.securityToken),
+              headers=headers,
               timeout=30,
-              headers={"User-Agent": "transsion-ota-prober/1.0"},
-          ).decode("utf-8", errors="replace")
-          print("===== KM9 ANDROID 16 RAW OTA METADATA =====")
-          print(content)
+          )
+          second.raise_for_status()
+          r2 = checkin_generator_pb2.AndroidCheckinResponse()
+          r2.ParseFromString(second.content)
+          print(f"SECOND androidId={r2.androidId} securityToken={r2.securityToken} settings={len(r2.setting)}")
+          second_settings = {e.name.decode(errors='ignore'): e.value.decode(errors='ignore') for e in r2.setting}
+          print("SECOND update_title=", second_settings.get("update_title"))
+          print("SECOND update_url=", second_settings.get("update_url"))
+          print("SECOND update_size=", second_settings.get("update_size"))
           PY
