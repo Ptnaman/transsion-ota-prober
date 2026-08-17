@@ -28,43 +28,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
 
-      - name: Probe KM9 using original google-ota-prober request fields
-        env:
-          bot_token: ${{ secrets.BOT_TOKEN }}
-          chat_id: ${{ secrets.CHAT_ID }}
-          telegraph_token: ${{ secrets.TELEGRAPH_TOKEN }}
+      - name: Extract KM9 170 to 180 OTA source metadata
         run: |
-          set -o pipefail
-          sed -i 's/timeout=15/timeout=45/' checkota/telegram.py
           python - <<'PY'
-          from pathlib import Path
-          p = Path("checkota/update_checker.py")
-          s = p.read_text()
-          s = s.replace(
-              '        checkin.build.CopyFrom(build)\n        checkin.roaming = "WIFI::"',
-              '        checkin.build.CopyFrom(build)\n        checkin.lastCheckinMsec = 0\n        checkin.roaming = "WIFI::"'
-          )
-          s = s.replace(
-              '        checkin.voiceCapable = False\n',
-              '        checkin.voiceCapable = False\n        checkin.unknown19 = "WIFI"\n'
-          )
-          s = s.replace(
-              '        payload.fetchSystemUpdates = 1\n',
-              '        payload.fetchSystemUpdates = 1\n        payload.unknown30 = 0\n'
-          )
-          p.write_text(s)
+          from checkota.zip_metadata import fetch_zip_member
+          url = "https://android.googleapis.com/packages/ota-api/package/8eae88d4e49233f30b0ff61cee652235b176031b.zip"
+          content = fetch_zip_member(
+              url,
+              "META-INF/com/android/metadata",
+              timeout=30,
+              headers={"User-Agent": "transsion-ota-prober/1.0"},
+          ).decode("utf-8", errors="replace")
+          print("===== RAW OTA METADATA =====")
+          print(content)
           PY
-          FOUND=0
-          for i in $(seq 1 5); do
-            echo "===== Original-request identity attempt $i/5 ====="
-            OUTPUT=$(checkota -c configs/config-KM9.yml --region OP --force-notify --timeout 60 2>&1 || true)
-            echo "$OUTPUT"
-            if echo "$OUTPUT" | grep -q "New OTA update found"; then
-              FOUND=1
-              echo "OTA detected with original request fields on attempt $i."
-              break
-            fi
-          done
-          if [ "$FOUND" -eq 0 ]; then
-            echo "No OTA detected with original request fields in 5 attempts."
-          fi
