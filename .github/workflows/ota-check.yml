@@ -4,6 +4,9 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "17 * * * *"
+  push:
+    paths:
+      - ".github/trigger-ota-test"
 
 permissions:
   contents: write
