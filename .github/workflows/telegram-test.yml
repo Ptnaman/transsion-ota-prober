@@ -2,9 +2,6 @@ name: Tecno Naman Telegram Test
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - ".github/workflows/telegram-test.yml"
 
 permissions:
   contents: read
@@ -15,7 +12,7 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - name: Send missed POVA Slim 5G Android 16 OTA
+      - name: Test Telegram connection
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
@@ -25,11 +22,17 @@ jobs:
           import os
           import urllib.request
 
-          text = "<b>OTA Update Available</b>\n\n<b>Device:</b> TECNO POVA Slim 5G (Global - OP Market)\n<b>Title:</b> Tcard_KM9-16.3.0.145SP04-OP005PF001AZ_a15\n<b>OS:</b> Android 16\n\n<b>Update Version:</b>\nKM9-16.3.0.145SP04(OP005PF001AZ)\n\n<b>Size:</b> 8849.2 MB\n<b>Incremental:</b> 301450032\n<b>Security patch:</b> 2026-08-01\n<b>Fingerprint:</b> <code>TECNO/KM9-OP/TECNO-KM9:16/BP2A.250605.031.A3/301450032:user/release-keys</code>\n<b>Build date:</b> 2026-08-11 01:14:46 (CST)\n\n<b>Google OTA link:</b>\nhttps://android.googleapis.com/packages/ota-api/package/572127f6cb5c8ea3ed479b275e5b8cac8386a082.zip"
-          payload = json.dumps({"chat_id": os.environ["CHAT_ID"], "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}).encode()
-          req = urllib.request.Request(f"https://api.telegram.org/bot{os.environ['BOT_TOKEN']}/sendMessage", data=payload, headers={"Content-Type": "application/json"})
+          payload = json.dumps({
+              "chat_id": os.environ["CHAT_ID"],
+              "text": "✅ Tecno Naman OTA Tracker Telegram connection is working.",
+          }).encode()
+          req = urllib.request.Request(
+              f"https://api.telegram.org/bot{os.environ['BOT_TOKEN']}/sendMessage",
+              data=payload,
+              headers={"Content-Type": "application/json"},
+          )
           with urllib.request.urlopen(req, timeout=45) as response:
               if response.status != 200:
                   raise RuntimeError(f"Telegram HTTP {response.status}")
-          print("POVA Slim 5G Android 16 OTA notification sent successfully")
+          print("Telegram connection test sent successfully")
           PY
