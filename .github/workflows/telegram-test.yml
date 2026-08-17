@@ -34,4 +34,4 @@ jobs:
           chat_id: ${{ secrets.CHAT_ID }}
           telegraph_token: ${{ secrets.TELEGRAPH_TOKEN }}
         run: |
-          checkota -c configs/config-LJ8k.yml --region IN --force-notify --no-config --timeout 600
+          checkota -c configs/config-LJ8k.yml --region IN --force-notify --timeout 600
