@@ -4,9 +4,6 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "17 * * * *"
-  push:
-    paths:
-      - ".github/trigger-ota-test"
 
 permissions:
   contents: write
@@ -33,11 +30,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e .
-
-      - name: One-time real OTA delivery test
-        if: github.event_name == 'push'
-        run: |
-          sed -i '\|^X6885-16.3.0.140SP11-OP005PF001AZ-16.3.0.140SP17-OP007PF001AZ_20260805211848$|d' processed_updates.txt
 
       - name: Scan all TECNO Infinix itel configs and notify new OTA
         env:
