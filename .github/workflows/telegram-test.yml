@@ -29,20 +29,24 @@ jobs:
           pip install -e .
 
       - name: Probe TECNO POVA Slim 5G Global with multiple identities
+        env:
+          bot_token: ${{ secrets.BOT_TOKEN }}
+          chat_id: ${{ secrets.CHAT_ID }}
+          telegraph_token: ${{ secrets.TELEGRAPH_TOKEN }}
         run: |
           set -o pipefail
-          FOUND=""
+          sed -i 's/timeout=15/timeout=45/' checkota/telegram.py
+          FOUND=0
           for i in $(seq 1 20); do
-            IMEI=$(python -c 'from utils import functions; print(functions.generateImei())')
-            echo "===== Identity attempt $i/20 | IMEI: $IMEI ====="
-            OUTPUT=$(checkota -c configs/config-KM9.yml --region OP --imei "$IMEI" --dry-run --skip-telegram --timeout 60 2>&1 || true)
+            echo "===== Identity attempt $i/20 ====="
+            OUTPUT=$(checkota -c configs/config-KM9.yml --region OP --force-notify --timeout 60 2>&1 || true)
             echo "$OUTPUT"
             if echo "$OUTPUT" | grep -q "New OTA update found"; then
-              FOUND="$IMEI"
-              echo "FOUND_ELIGIBLE_IMEI=$IMEI"
+              FOUND=1
+              echo "Eligible rollout identity found on attempt $i."
               break
             fi
           done
-          if [ -z "$FOUND" ]; then
+          if [ "$FOUND" -eq 0 ]; then
             echo "No eligible identity found in 20 attempts."
           fi
