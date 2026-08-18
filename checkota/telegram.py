@@ -108,7 +108,7 @@ class TgNotify:
                 "access_token": self.telegraph_token,
                 "title": f"Update Details: {title}",
                 "author_name": "Tecno Naman",
-                "author_url": "https://t.me/Tecno_Naman",
+                "author_url": "https://t.me/tecnonamanupdate",
                 "content": content_nodes,
                 "return_content": False,
             }
