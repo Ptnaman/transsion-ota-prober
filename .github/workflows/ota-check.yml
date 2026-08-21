@@ -15,7 +15,7 @@ concurrency:
 jobs:
   ota-check:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 35
 
     steps:
       - name: Checkout repository
@@ -32,13 +32,36 @@ jobs:
           pip install -e .
 
       - name: Scan all TECNO Infinix itel configs and notify new OTA
+        id: scan
         env:
           bot_token: ${{ secrets.BOT_TOKEN }}
           chat_id: ${{ secrets.CHAT_ID }}
           telegraph_token: ${{ secrets.TELEGRAPH_TOKEN }}
         run: |
           sed -i 's/timeout=15/timeout=45/' checkota/telegram.py
-          checkota -d configs/ --jobs 4 --timeout 600
+
+          status=1
+          for attempt in 1 2; do
+            echo "OTA scan attempt ${attempt}/2"
+            set +e
+            checkota -d configs/ --jobs 8 --timeout 900
+            status=$?
+            set -e
+
+            if [ "$status" -eq 0 ]; then
+              break
+            fi
+
+            echo "OTA scan attempt ${attempt} exited with code ${status}."
+            if [ "$attempt" -lt 2 ]; then
+              echo "Retrying failed/transient checks once..."
+              sleep 10
+            fi
+          done
+
+          echo "status=${status}" >> "$GITHUB_OUTPUT"
+          # Persist successful OTA state even if one config still failed.
+          exit 0
 
       - name: Persist OTA state
         run: |
@@ -52,3 +75,10 @@ jobs:
             git commit -m "Update OTA tracker state"
             git push
           fi
+
+      - name: Report incomplete OTA scan
+        if: steps.scan.outputs.status != '0'
+        run: |
+          echo "OTA scan still had failures after retry (exit code: ${{ steps.scan.outputs.status }})."
+          echo "Successful updates were still notified and persisted; inspect this run for the failed configs."
+          exit 1
