@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import html
 import re
+
 import requests
 
 from checkota.constants import (
@@ -20,18 +22,21 @@ class TgNotify:
         self,
         token: str,
         chat_id: str,
-        telegraph_token: str,
+        telegraph_token: str | None = "",
         session: requests.Session | None = None,
     ):
         if not token or not chat_id:
             raise ValueError("Bot token and chat ID required")
-        if not telegraph_token:
-            raise ValueError("Telegraph token is required")
         self.token = token
         self.chat_id = chat_id
-        self.telegraph_token = telegraph_token
+        self.telegraph_token = telegraph_token or ""
         self.url = f"https://api.telegram.org/bot{token}"
-        self.session = session or requests.Session()
+        if session is None:
+            sess = requests.Session()
+            sess.trust_env = False
+            self.session = sess
+        else:
+            self.session = session
 
     @staticmethod
     def _html_to_telegraph_nodes(html_content: str) -> list:
@@ -73,20 +78,22 @@ class TgNotify:
                     continue
 
                 # Parse inline <b>bold</b> tags within this line
-                line_children = []
+                line_children: list = []
                 last_end = 0
                 for match in re.finditer(r"<b>(.*?)</b>", line):
                     if match.start() > last_end:
                         text = line[last_end : match.start()]
                         if text:
-                            line_children.append(text)
-                    line_children.append({"tag": "b", "children": [match.group(1)]})
+                            line_children.append(html.unescape(text))
+                    line_children.append(
+                        {"tag": "b", "children": [html.unescape(match.group(1))]}
+                    )
                     last_end = match.end()
 
                 if last_end < len(line):
                     text = line[last_end:]
                     if text:
-                        line_children.append(text)
+                        line_children.append(html.unescape(text))
 
                 # Add line children to paragraph
                 para_children.extend(line_children)
@@ -98,7 +105,11 @@ class TgNotify:
             if para_children:
                 nodes.append({"tag": "p", "children": para_children})
 
-        return nodes if nodes else [{"tag": "p", "children": [html_content]}]
+        return (
+            nodes
+            if nodes
+            else [{"tag": "p", "children": [html.unescape(html_content)]}]
+        )
 
     def _create_telegraph_page(self, title: str, content: str) -> str | None:
         try:
@@ -106,14 +117,19 @@ class TgNotify:
 
             payload = {
                 "access_token": self.telegraph_token,
-                "title": f"Update Details: {title}",
-                "author_name": "Tecno Naman",
-                "author_url": "https://t.me/tecnonamanupdate",
+                "title": f"Update Details: {html.unescape(title)}",
+                "author_name": "TRANSSION Updates Tracker",
+                "author_url": "https://t.me/TranssionUpdatesTracker",
                 "content": content_nodes,
                 "return_content": False,
             }
 
-            response = self.session.post(TELEGRAPH_API_URL, json=payload, timeout=10)
+            response = self.session.post(
+                TELEGRAPH_API_URL,
+                json=payload,
+                proxies={"http": None, "https": None, "all": None},
+                timeout=10,
+            )
             response.raise_for_status()
 
             result = response.json()
@@ -296,7 +312,10 @@ class TgNotify:
                         if title_match
                         else (device_title or "Update")
                     )
-                    telegraph_url = self._create_telegraph_page(page_title, description)
+                    if self.telegraph_token:
+                        telegraph_url = self._create_telegraph_page(
+                            page_title, description
+                        )
 
                     truncated_desc = self._truncate_desc(
                         description, telegraph_url=telegraph_url
@@ -320,9 +339,17 @@ class TgNotify:
                 }
 
             response = self.session.post(
-                f"{self.url}/sendMessage", json=payload, timeout=15
+                f"{self.url}/sendMessage",
+                json=payload,
+                proxies={"http": None, "https": None, "all": None},
+                timeout=15,
             )
             response.raise_for_status()
+
+            result = response.json()
+            if not isinstance(result, dict) or not result.get("ok"):
+                Log.e(f"Telegram API error: {result}")
+                return False
 
             Log.s("Notification sent successfully")
             return True
