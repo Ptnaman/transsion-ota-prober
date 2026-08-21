@@ -95,6 +95,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Overall wall-clock budget in seconds. When exceeded, in-flight requests are"
         " signalled to stop and the process exits (0 = no limit).",
     )
+    parser.add_argument(
+        "--fetch-zip-proxy",
+        "--zip-proxy",
+        action="store_true",
+        dest="fetch_zip_proxy",
+        help="Use proxy environment variables when fetching OTA ZIP metadata",
+    )
     return parser
 
 
@@ -125,6 +132,7 @@ def resolve_config_path(value: Path) -> Path:
 
 
 def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    args.zip_proxy = getattr(args, "fetch_zip_proxy", False)
     if args.timeout < 0:
         parser.error("--timeout must be >= 0")
     if args.update_incremental:
@@ -330,7 +338,15 @@ def main() -> int:
     args = parser.parse_args()
     _validate_args(parser, args)
 
-    args.run_context = create_run_context(args.dry_run, pool_size=max(1, args.jobs))
+    zip_proxy = getattr(args, "zip_proxy", getattr(args, "fetch_zip_proxy", False))
+    ctx_kwargs = {}
+    if zip_proxy:
+        ctx_kwargs["zip_proxy"] = True
+    args.run_context = create_run_context(
+        args.dry_run,
+        pool_size=max(1, args.jobs),
+        **ctx_kwargs,
+    )
     ctx = args.run_context
     previous_sigint = install_interrupt_handler(ctx)
     watchdog = start_watchdog(ctx, args.timeout)
@@ -387,17 +403,12 @@ def main() -> int:
         # mid-`apply_update_actions` could otherwise append to
         # `ctx.pending_notifications` after the drain took its snapshot.
         #
-        # Only run drain in sweep mode (where notifications were buffered).
-        # Direct `--fp` and config-error exits don't buffer anything, so
-        # the drain would just be a no-op.
-        #
-        # By this point the signal handler and the `except KeyboardInterrupt`
-        # arm have already set stop_event. Workers are already stopped
-        # (executor.shutdown(wait=True) above), so clearing stop_event here
-        # cannot resurrect them -- it only allows the drain to run. Sessions
-        # are still alive (closed below) so `create_notifier(ctx, args)` from
-        # inside drain still gets a usable session.
-        if buffered_notifications_possible and exit_code in (0, 130):
+        # Drain every buffered notification even when one or more config checks
+        # failed. Successful configs may already have advanced their YAML state;
+        # withholding their notifications on an unrelated failure can make the
+        # discovered OTA disappear from the next scan and be silently missed.
+        # Direct `--fp` mode never buffers, so the predicate remains false there.
+        if buffered_notifications_possible:
             ctx.stop_event.clear()
             drain_result = drain_pending_notifications(ctx, args)
         # Close sessions safely (no worker threads should be using them).
