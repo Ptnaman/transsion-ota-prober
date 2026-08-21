@@ -403,17 +403,12 @@ def main() -> int:
         # mid-`apply_update_actions` could otherwise append to
         # `ctx.pending_notifications` after the drain took its snapshot.
         #
-        # Only run drain in sweep mode (where notifications were buffered).
-        # Direct `--fp` and config-error exits don't buffer anything, so
-        # the drain would just be a no-op.
-        #
-        # By this point the signal handler and the `except KeyboardInterrupt`
-        # arm have already set stop_event. Workers are already stopped
-        # (executor.shutdown(wait=True) above), so clearing stop_event here
-        # cannot resurrect them -- it only allows the drain to run. Sessions
-        # are still alive (closed below) so `create_notifier(ctx, args)` from
-        # inside drain still gets a usable session.
-        if buffered_notifications_possible and exit_code in (0, 130):
+        # Drain every buffered notification even when one or more config checks
+        # failed. Successful configs may already have advanced their YAML state;
+        # withholding their notifications on an unrelated failure can make the
+        # discovered OTA disappear from the next scan and be silently missed.
+        # Direct `--fp` mode never buffers, so the predicate remains false there.
+        if buffered_notifications_possible:
             ctx.stop_event.clear()
             drain_result = drain_pending_notifications(ctx, args)
         # Close sessions safely (no worker threads should be using them).
