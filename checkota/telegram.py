@@ -118,8 +118,8 @@ class TgNotify:
             payload = {
                 "access_token": self.telegraph_token,
                 "title": f"Update Details: {html.unescape(title)}",
-                "author_name": "TRANSSION Updates Tracker",
-                "author_url": "https://t.me/TranssionUpdatesTracker",
+                "author_name": "Tecno Naman",
+                "author_url": "https://t.me/tecnonamanupdate",
                 "content": content_nodes,
                 "return_content": False,
             }
