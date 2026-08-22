@@ -101,31 +101,21 @@ def get_cached_ota_metadata(ctx: RunContext, url: str) -> dict[str, str] | None:
             cached = ctx.metadata_cache.get(url, _CACHE_MISS)
             if cached is not _CACHE_MISS:
                 return cast(dict[str, str] | None, cached)
-            # Another worker is already fetching this URL; capture its event, then
-            # release the lock before waiting so the fetcher can re-acquire it.
             inflight = ctx._metadata_inflight.get(url)
             if inflight is not None:
                 wait_event = inflight
             else:
-                # We are the fetcher: register an in-flight event under the lock so
-                # no other worker decides to fetch the same URL concurrently.
                 wait_event = None
                 fetcher_event = threading.Event()
                 ctx._metadata_inflight[url] = fetcher_event
 
         if wait_event is not None:
-            # Bounded wait: if the fetcher outlives the budget, loop to re-check
-            # stop_event (responsive shutdown) and the cache instead of blocking
-            # forever on a peer that may be stuck on a socket read.
             if not wait_event.wait(_METADATA_WAIT_TIMEOUT):
                 continue
             with ctx.cache_lock:
                 cached = ctx.metadata_cache.get(url, _CACHE_MISS)
             if cached is not _CACHE_MISS:
                 return cast(dict[str, str] | None, cached)
-            # Woken but nothing cached => the fetch failed (failures are not
-            # cached, see below). Loop and try to fetch it ourselves rather than
-            # inheriting the peer's transient failure.
             continue
 
         assert fetcher_event is not None
@@ -136,9 +126,6 @@ def get_cached_ota_metadata(ctx: RunContext, url: str) -> dict[str, str] | None:
             )
         finally:
             with ctx.cache_lock:
-                # Only cache successful lookups. Caching None would poison the
-                # URL for every later variant sharing it, turning one transient
-                # network blip into permanently-dropped updates.
                 if ota_meta is not None:
                     ctx.metadata_cache[url] = ota_meta
                 ctx._metadata_inflight.pop(url, None)
@@ -197,7 +184,7 @@ def collect_update_info(
         Log.e("Missing essential update info (title, url, or size)")
         return 1, None
 
-    Log.s(f"New OTA update found: {title}")
+    Log.s(f"OTA update found: {title}")
     Log.i(f"Size: {size}")
     Log.i(f"URL: {url}")
     if args.dry_run and args.fp and desc:
@@ -207,6 +194,7 @@ def collect_update_info(
 
     with ctx.file_lock:
         is_new_update = title not in ctx.processed_titles
+
     if args.register_update:
         if not is_new_update:
             Log.i(
@@ -229,16 +217,28 @@ def collect_update_info(
     if not is_new_update:
         if update_incremental_only:
             Log.i(
-                "Update title already known; proceeding to update incremental value (--update-incremental)."
+                "Update title already known; proceeding to repair/advance the config baseline "
+                "(--update-incremental)."
             )
-        elif not args.force_notify:
-            Log.i("This update has already been processed. Skipping.")
-            return 0, None
+        elif args.force_notify:
+            Log.w(f"Forcing notification for an already processed update: {title}")
+        else:
+            Log.i(
+                "Update title already known; checking OTA metadata to repair/advance "
+                "a stale config baseline without sending a duplicate notification."
+            )
 
     ota_meta = get_cached_ota_metadata(ctx, url)
     if not ota_meta or not ota_meta.get("fingerprint"):
+        if not is_new_update and not args.force_notify:
+            Log.w(
+                "Could not determine target fingerprint for a known OTA; "
+                "leaving the config unchanged and skipping duplicate notification."
+            )
+            return 0, None
         Log.e(
-            "Could not determine target fingerprint from OTA metadata. Cannot derive incremental information."
+            "Could not determine target fingerprint from OTA metadata. "
+            "Cannot derive incremental information."
         )
         return 1, None
 
@@ -258,8 +258,6 @@ def collect_update_info(
         Log.i(f"Build date: {build_date} (CST)")
     if sdk_log_line:
         Log.i(sdk_log_line)
-    if not is_new_update and args.force_notify:
-        Log.w(f"Forcing notification for an already processed update: {title}")
 
     data["fingerprint"] = target_fp
     if inc:
@@ -293,55 +291,52 @@ def collect_update_info(
 def apply_update_actions(
     ctx: RunContext, update: VariantUpdate, args: argparse.Namespace
 ) -> int:
-    update_incremental_only = bool(getattr(args, "update_incremental", False))
-    if update_incremental_only or update.is_new_update:
-        parsed_target = parse_fingerprint(update.target_fp)
-        if args.incremental:
-            Log.i("--incremental override active; skipping config file update.")
-        elif getattr(args, "no_config", False):
-            Log.i("No config file mode; skipping incremental config update.")
-        elif (
-            "Tcard" in update.title
-            and parsed_target
-            and parsed_target["android_version"] == update.cfg.android_version
-        ):
-            Log.i(
-                "Skipping config update because update title contains 'Tcard' without an Android version change."
-            )
-        elif update.target_incremental:
-            if args.dry_run:
-                if parsed_target:
-                    Log.i(
-                        f"Dry-run: would update {update.config_path} "
-                        f"android_version={parsed_target['android_version']}, "
-                        f"build_tag={parsed_target['build_tag']}, "
-                        f"incremental={parsed_target['incremental']}."
-                    )
-                else:
-                    Log.i(
-                        f"Dry-run: would update {update.config_path} incremental to {update.target_incremental}."
-                    )
+    parsed_target = parse_fingerprint(update.target_fp)
+
+    if args.incremental:
+        Log.i("--incremental override active; skipping config file update.")
+    elif getattr(args, "no_config", False):
+        Log.i("No config file mode; skipping incremental config update.")
+    elif update.target_incremental:
+        if args.dry_run:
+            if parsed_target:
+                Log.i(
+                    f"Dry-run: would update {update.config_path} "
+                    f"android_version={parsed_target['android_version']}, "
+                    f"build_tag={parsed_target['build_tag']}, "
+                    f"incremental={parsed_target['incremental']}."
+                )
             else:
-                with ctx.file_lock:
-                    if update_config_from_fingerprint(
-                        update.config_path, update.cfg, update.target_fp
-                    ):
-                        # Even on the no-op path (YAML already matches), we
-                        # still mutate the in-memory cfg so subsequent code
-                        # paths see the post-OTA values regardless of whether
-                        # the file changed on disk. See the two early-return
-                        # paths in manager.update_config_from_fingerprint
-                        # (variants branch and single-config branch).
-                        if parsed_target:
-                            update.cfg.android_version = parsed_target[
-                                "android_version"
-                            ]
-                            update.cfg.build_tag = parsed_target["build_tag"]
-                            update.cfg.incremental = parsed_target["incremental"]
+                Log.i(
+                    f"Dry-run: would update {update.config_path} "
+                    f"incremental to {update.target_incremental}."
+                )
         else:
-            Log.w(
-                "Unable to determine new incremental value from OTA metadata; config not updated."
-            )
+            with ctx.file_lock:
+                if update_config_from_fingerprint(
+                    update.config_path, update.cfg, update.target_fp
+                ):
+                    if parsed_target:
+                        update.cfg.android_version = parsed_target["android_version"]
+                        update.cfg.build_tag = parsed_target["build_tag"]
+                        update.cfg.incremental = parsed_target["incremental"]
+    else:
+        Log.w(
+            "Unable to determine new incremental value from OTA metadata; "
+            "config not updated."
+        )
+
+    update_incremental_only = bool(getattr(args, "update_incremental", False))
+    if (
+        not update.is_new_update
+        and not args.force_notify
+        and not update_incremental_only
+    ):
+        Log.i(
+            "Known OTA baseline checked/repaired; duplicate Telegram notification skipped."
+        )
+        Log.s("Update check completed successfully")
+        return 0
 
     notifier = create_notifier(ctx, args)
     if notifier:
@@ -349,8 +344,6 @@ def apply_update_actions(
         device_title = f"{update.cfg.model} - {update.title}"
 
         if is_sweep_mode(args):
-            # Sweep mode: buffer the notification; drain at end of run with a
-            # SWEEP_TELEGRAM_DELAY-second gap between sends.
             with ctx.pending_lock:
                 ctx.pending_notifications.append(
                     PendingNotification(
